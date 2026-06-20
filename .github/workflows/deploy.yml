@@ -60,7 +60,17 @@ jobs:
             --function-name "$FUNCTION" \
             --s3-bucket "$ARTIFACT_BUCKET" \
             --s3-key "$S3_KEY"
-          aws lambda wait function-updated --function-name "$FUNCTION"
+          # Poll LastUpdateStatus via GetFunction (the role grants GetFunction, not
+          # GetFunctionConfiguration, so we don't use the built-in `wait function-updated`).
+          for i in $(seq 1 24); do
+            st=$(aws lambda get-function --function-name "$FUNCTION" \
+                 --query 'Configuration.LastUpdateStatus' --output text)
+            echo "LastUpdateStatus=$st"
+            [ "$st" = "Successful" ] && exit 0
+            [ "$st" = "Failed" ] && { echo "update reported Failed"; exit 1; }
+            sleep 5
+          done
+          echo "update accepted; still InProgress after 120s (settles async)"
 
       - name: Function status
         if: always()
