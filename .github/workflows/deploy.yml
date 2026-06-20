@@ -9,16 +9,18 @@ on:
   workflow_dispatch:
 
 # OIDC: the runner assumes IAM role aisl-click-deploy, which can ONLY push the zip
-# and call update-function-code on this function. No static key, no secrets, no
-# cloudformation. Infra changes go through scripts/deploy.sh by someone with broader
-# access. Only this repo's main branch can assume the role (pinned in its trust policy).
+# and call update-function-code on this function. No static AWS key, no cloudformation.
+# AISL_DEPLOY_ROLE_ARN + AISL_ARTIFACT_BUCKET are GitHub SECRETS (not variables) so the
+# account id they contain is masked in the public run logs. Infra changes go through
+# scripts/deploy.sh by someone with broader access. Only this repo's main branch can
+# assume the role (pinned in its trust policy).
 permissions:
   id-token: write   # mint the OIDC token
   contents: read    # actions/checkout
 
 env:
   AWS_REGION: eu-west-1
-  ARTIFACT_BUCKET: ${{ vars.AISL_ARTIFACT_BUCKET }}
+  ARTIFACT_BUCKET: ${{ secrets.AISL_ARTIFACT_BUCKET }}
   S3_KEY: redirector/latest.zip
   FUNCTION: aisl-click-redirector
 
@@ -31,7 +33,7 @@ jobs:
       - name: Configure AWS (OIDC, no static key)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AISL_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AISL_DEPLOY_ROLE_ARN }}
           aws-region: eu-west-1
 
       - name: Build (arm64)

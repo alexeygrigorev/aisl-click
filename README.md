@@ -75,7 +75,10 @@ aws cloudformation describe-stacks --stack-name aisl-click-deploy --region eu-we
   --query "Stacks[0].Outputs[?OutputKey==\`DeployRoleArn\`].OutputValue" --output text
 ```
 
-In the GitHub repo (Settings → Secrets and variables → Actions → **Variables** — no secrets):
+In the GitHub repo (Settings → Secrets and variables → Actions → **Secrets**) add these two
+as **secrets, not variables**. This is a public repo, so the workflow run logs are public too;
+secrets are auto-masked in logs, which keeps the account id (present in the role ARN and bucket
+name) out of them. There is still **no AWS access-key secret** — OIDC handles auth.
 - `AISL_ARTIFACT_BUCKET` = `$BUCKET`
 - `AISL_DEPLOY_ROLE_ARN` = the ARN printed above
 
