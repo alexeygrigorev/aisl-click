@@ -45,10 +45,11 @@ Resources:
               - Effect: Allow
                 Action: [s3:PutObject, s3:GetObject]
                 Resource: !Sub "arn:aws:s3:::${ArtifactBucket}/*"
-              # Update ONLY this function's code (and read it back for the status wait).
-              # Not lambda:* — just these two.
+              # Update ONLY this function's code, and read it back. GetFunction feeds
+              # the status step; GetFunctionConfiguration feeds `wait function-updated`.
+              # Not lambda:* — just these three.
               - Effect: Allow
-                Action: [lambda:UpdateFunctionCode, lambda:GetFunction]
+                Action: [lambda:UpdateFunctionCode, lambda:GetFunction, lambda:GetFunctionConfiguration]
                 Resource:
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:aisl-click-redirector"
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:aisl-click-redirector:*"
