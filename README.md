@@ -24,7 +24,7 @@ done via `route53domains register-domain`, ~$3/yr, auto-renew).
 ## Add / change a link
 
 Edit `REDIRECTS` in `redirector/src/main.rs`, run `cargo test` locally (x86_64),
-push to `main`. CI rebuilds arm64 and redeploys the app stack.
+push to `main`. CI rebuilds arm64 and updates the Lambda code (just that — no infra).
 
 ## One-time setup
 
@@ -48,28 +48,38 @@ After step 4: `https://aisl.click/munich` → 302 → the workshop URL.
 
 ## CI/CD (GitHub Actions, OIDC — no static key)
 
-The runner assumes IAM role `aisl-click-deploy` via **GitHub OIDC** — there are no
-long-lived AWS credentials and no IAM user. The role's trust policy is pinned to
-this repo's `main` branch only, so nothing else can assume it. It can deploy only
-`aisl-click-app` (plus the Lambda role's lifecycle, scoped to `aisl-click-redirector`).
+The runner assumes IAM role `aisl-click-deploy` via **GitHub OIDC** — no long-lived
+AWS credentials, no IAM user, no secrets in GitHub. The role's trust policy is pinned
+to this repo's `main` branch only, so nothing else can assume it.
+
+The role is intentionally tiny — it can do **two things**: push the zip to the artifact
+bucket and call `lambda:UpdateFunctionCode` on `aisl-click-redirector`. No
+cloudformation, no iam, no apigateway, no `lambda:*`. Infra changes (new env vars,
+HTTP API, CloudFront) go through `scripts/deploy.sh` by someone with broader access.
 
 ```bash
-# create the GitHub OIDC provider + the deploy role (assumed by the repo)
+# 0. one-time: create the GitHub OIDC provider in the account (skip if it exists)
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+
+# 1. create the deploy role (assumed by the repo's main branch)
 aws cloudformation deploy --stack-name aisl-click-deploy \
   --template-file infra/github-deploy.yaml --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides ArtifactBucket=$BUCKET GitHubRepo=alexeygrigorev/aisl-click \
   --region eu-west-1
 
-# role ARN to put in the GitHub variable below
+# 2. role ARN to put in the GitHub variable below
 aws cloudformation describe-stacks --stack-name aisl-click-deploy --region eu-west-1 \
   --query "Stacks[0].Outputs[?OutputKey==\`DeployRoleArn\`].OutputValue" --output text
 ```
 
-In the GitHub repo (Settings → Secrets and variables → Actions → Variables) — **no secrets needed**:
+In the GitHub repo (Settings → Secrets and variables → Actions → **Variables** — no secrets):
 - `AISL_ARTIFACT_BUCKET` = `$BUCKET`
 - `AISL_DEPLOY_ROLE_ARN` = the ARN printed above
 
-Push to `main` → build arm64 → upload zip → deploy app stack (as the assumed role).
+Push to `main` → build arm64 → push zip → update-function-code (as the assumed role).
 
 ## Layout
 
@@ -80,7 +90,7 @@ redirector/
 infra/
   app.yaml                eu-west-1: role + arm64 lambda + HTTP API (public)
   edge.yaml               us-east-1: hosted zone + cert + cloudfront + alias
-  github-deploy.yaml      CI deploy role (GitHub OIDC; no static key, no IAM user)
-.github/workflows/deploy.yml   build arm64 → s3 → deploy app
+  github-deploy.yaml      CI deploy role (GitHub OIDC; no static key, no IAM user, code-update only)
+.github/workflows/deploy.yml   build arm64 → s3 → update-function-code
 scripts/                  build.sh · test.sh · deploy.sh · deploy-edge.sh · delegate-ns.sh
 ```

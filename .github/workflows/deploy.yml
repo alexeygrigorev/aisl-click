@@ -5,12 +5,13 @@ on:
     branches: [main]
     paths:
       - "redirector/**"
-      - "infra/app.yaml"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
-# OIDC: the runner assumes IAM role aisl-click-deploy. No static key, no secrets.
-# Only this repo's main branch can assume it (pinned in the role trust policy).
+# OIDC: the runner assumes IAM role aisl-click-deploy, which can ONLY push the zip
+# and call update-function-code on this function. No static key, no secrets, no
+# cloudformation. Infra changes go through scripts/deploy.sh by someone with broader
+# access. Only this repo's main branch can assume the role (pinned in its trust policy).
 permissions:
   id-token: write   # mint the OIDC token
   contents: read    # actions/checkout
@@ -19,7 +20,7 @@ env:
   AWS_REGION: eu-west-1
   ARTIFACT_BUCKET: ${{ vars.AISL_ARTIFACT_BUCKET }}
   S3_KEY: redirector/latest.zip
-  APP_STACK: aisl-click-app
+  FUNCTION: aisl-click-redirector
 
 jobs:
   deploy:
@@ -48,21 +49,17 @@ jobs:
               "redirector/target/aarch64-unknown-linux-musl/release/bootstrap", "bootstrap")
           PY
 
-      - name: Upload artifact to S3
+      - name: Push zip to artifact bucket
         run: aws s3 cp dist/bootstrap.zip "s3://${{ env.ARTIFACT_BUCKET }}/${{ env.S3_KEY }}"
 
-      - name: Deploy app stack (eu-west-1)
+      - name: Update Lambda code
         run: |
-          aws cloudformation deploy \
-            --stack-name "$APP_STACK" \
-            --template-file infra/app.yaml \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset \
-            --region eu-west-1 \
-            --parameter-overrides \
-              CodeS3Bucket="$ARTIFACT_BUCKET" \
-              CodeS3Key="$S3_KEY"
+          aws lambda update-function-code \
+            --function-name "$FUNCTION" \
+            --s3-bucket "$ARTIFACT_BUCKET" \
+            --s3-key "$S3_KEY"
+          aws lambda wait function-updated --function-name "$FUNCTION"
 
-      - name: Stack outputs
+      - name: Function status
         if: always()
-        run: aws cloudformation describe-stacks --stack-name "$APP_STACK" --region eu-west-1 --query "Stacks[0].Outputs" --output table
+        run: aws lambda get-function --function-name "$FUNCTION" --query 'Configuration.{State:State,LastUpdate:LastUpdateStatus,CodeSize:CodeSize}' --output table
