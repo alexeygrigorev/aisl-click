@@ -1,0 +1,20 @@
+[package]
+name = "redirector"
+version = "0.1.0"
+edition = "2021"
+
+# Output binary named `bootstrap` (the entrypoint Lambda looks for on provided.al2023).
+[[bin]]
+name = "bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+lambda_http = "0.13"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+# Optimize the release binary for size (lightweight cold start + small zip).
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

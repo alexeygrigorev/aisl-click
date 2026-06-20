@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  aisl.click redirector — IAM role + arm64 Lambda + public API Gateway HTTP API (eu-west-1).
+  Uses an HTTP API rather than a Function URL because this account's SCP blocks public
+  Lambda Function URL invocation; API Gateway invokes Lambda as the apigateway service
+  principal, which is permitted.
+
+Parameters:
+  CodeS3Bucket:
+    Type: String
+  CodeS3Key:
+    Type: String
+    Default: redirector/latest.zip
+  MemorySize:
+    Type: Number
+    Default: 128
+  Timeout:
+    Type: Number
+    Default: 3
+
+Resources:
+  RedirectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aisl-click-redirector
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  RedirectorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aisl-click-redirector
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      Handler: bootstrap
+      Role: !GetAtt RedirectorRole.Arn
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
+
+  # HTTP API: $default route -> Lambda. Explicit Route+Stage avoids the circular
+  # dependency that the Api 'Target' shortcut would create (Target->Integration->Api).
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: aisl-click
+      ProtocolType: HTTP
+
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt RedirectorFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  HttpApiDefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: $default
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn: HttpApiDefaultRoute
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RedirectorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+Outputs:
+  ApiEndpoint:
+    Description: Public HTTP API endpoint (https://<id>.execute-api.eu-west-1.amazonaws.com)
+    Value: !GetAtt HttpApi.ApiEndpoint
+    Export:
+      Name: aisl-click:ApiEndpoint
+  FunctionArn:
+    Value: !GetAtt RedirectorFunction.Arn

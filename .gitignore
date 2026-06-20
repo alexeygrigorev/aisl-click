@@ -1,0 +1,5 @@
+redirector/target/
+dist/
+*.zip
+.DS_Store
+.env

@@ -1,0 +1,5 @@
+# Cross-compile to aarch64 (Lambda arm64/Graviton) from an x86_64 host or CI runner
+# using rustc's bundled lld + musl — no system cross-toolchain required.
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes"]

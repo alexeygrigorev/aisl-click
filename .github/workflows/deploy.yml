@@ -1,0 +1,68 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "redirector/**"
+      - "infra/app.yaml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+# OIDC: the runner assumes IAM role aisl-click-deploy. No static key, no secrets.
+# Only this repo's main branch can assume it (pinned in the role trust policy).
+permissions:
+  id-token: write   # mint the OIDC token
+  contents: read    # actions/checkout
+
+env:
+  AWS_REGION: eu-west-1
+  ARTIFACT_BUCKET: ${{ vars.AISL_ARTIFACT_BUCKET }}
+  S3_KEY: redirector/latest.zip
+  APP_STACK: aisl-click-app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS (OIDC, no static key)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AISL_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-1
+
+      - name: Build (arm64)
+        working-directory: redirector
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Package zip
+        run: |
+          mkdir -p dist
+          python3 - <<'PY'
+          import zipfile
+          zipfile.ZipFile("dist/bootstrap.zip", "w", zipfile.ZIP_DEFLATED).write(
+              "redirector/target/aarch64-unknown-linux-musl/release/bootstrap", "bootstrap")
+          PY
+
+      - name: Upload artifact to S3
+        run: aws s3 cp dist/bootstrap.zip "s3://${{ env.ARTIFACT_BUCKET }}/${{ env.S3_KEY }}"
+
+      - name: Deploy app stack (eu-west-1)
+        run: |
+          aws cloudformation deploy \
+            --stack-name "$APP_STACK" \
+            --template-file infra/app.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region eu-west-1 \
+            --parameter-overrides \
+              CodeS3Bucket="$ARTIFACT_BUCKET" \
+              CodeS3Key="$S3_KEY"
+
+      - name: Stack outputs
+        if: always()
+        run: aws cloudformation describe-stacks --stack-name "$APP_STACK" --region eu-west-1 --query "Stacks[0].Outputs" --output table

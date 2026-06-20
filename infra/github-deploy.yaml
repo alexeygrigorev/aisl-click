@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  GitHub Actions deploy access for aisl.click via OIDC — no static key, no IAM user.
+  The runner assumes aisl-click-deploy (short-lived, scoped to the repo's main branch
+  only) and deploys the app stack AS that role. It holds only what the app stack needs:
+  cloudformation on aisl-click-app, the Lambda role's iam lifecycle scoped to
+  aisl-click-redirector, lambda/apigateway/logs, and the artifact bucket. No long-lived
+  AWS credential exists anywhere.
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+  GitHubRepo:
+    Type: String
+    Description: owner/repo allowed to assume the role, e.g. alexeygrigorev/aisl-click
+    AllowedPattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+  OidcThumbprint:
+    Type: String
+    Default: "6938fd4d98bab03faadb97b34396831e3780aea1"
+    Description: GitHub Actions OIDC root CA thumbprint (AWS also chain-validates at runtime).
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontentusercontent.com
+      ClientIDList: [sts.amazonaws.com]
+      ThumbprintList: [!Ref OidcThumbprint]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aisl-click-deploy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontentusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontentusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/main"
+      Policies:
+        - PolicyName: deploy-app-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Change-set deploy of the app stack only. No DeleteStack — a deploy
+              # role should not be able to tear down what it deploys.
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetStackPolicy
+                  - cloudformation:ListChangeSets
+                Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/aisl-click-app/*"
+              # Template analysis the `deploy` CLI runs account-wide (read-only).
+              - Effect: Allow
+                Action: [cloudformation:GetTemplateSummary, cloudformation:ValidateTemplate]
+                Resource: "*"
+              # Manage the Lambda role the app stack declares (RedirectorRole),
+              # and pass it to the Lambda when the function is created/updated.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:DeleteRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aisl-click-redirector"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aisl-click-redirector-*"
+              # The redirector function only — not every lambda in the account.
+              - Effect: Allow
+                Action: [lambda:*]
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:aisl-click-redirector"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:aisl-click-redirector:*"
+              # The HTTP API the app stack owns. API Gateway ARNs are region-scoped
+              # (no account id), so this is limited to eu-west-1; the verbs cover the
+              # full management-plane API.
+              - Effect: Allow
+                Action: [apigateway:GET, apigateway:POST, apigateway:PUT, apigateway:PATCH, apigateway:DELETE]
+                Resource: !Sub "arn:aws:apigateway:${AWS::Region}::*"
+              # The Lambda log group only.
+              - Effect: Allow
+                Action: [logs:CreateLogGroup]
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/aisl-click-redirector:*"
+              - Effect: Allow
+                Action: [logs:DescribeLogGroups]
+                Resource: "*"
+              # Artifact bucket.
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !Sub "arn:aws:s3:::${ArtifactBucket}"
+
+Outputs:
+  DeployRoleArn:
+    Value: !GetAtt DeployRole.Arn

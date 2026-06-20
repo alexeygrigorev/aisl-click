@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  aisl.click global edge + DNS (deploy in us-east-1). Owns the Route 53 hosted zone
+  and (when EnableCustomDomain=true) the ACM cert (us-east-1, for CloudFront), the
+  CloudFront distribution (origin = the eu-west-1 HTTP API), and the alias record.
+  EnableCustomDomain=true only AFTER scripts/delegate-ns.sh, else the deploy blocks on
+  cert validation.
+
+Parameters:
+  OriginUrl:
+    Type: String
+    Description: Output ApiEndpoint of the aisl-click-app stack (eu-west-1). CloudFront origin.
+  DomainName:
+    Type: String
+    Default: aisl.click
+  EnableCustomDomain:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  HasEdge: !Equals [!Ref EnableCustomDomain, "true"]
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasEdge
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZone
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasEdge
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases: [!Ref DomainName]
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: ApiOrigin
+            # "https://<host>/..." -> 3rd slash-split element = <host>
+            DomainName: !Select [2, !Split ["/", !Ref OriginUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: ApiOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          ForwardedValues:
+            QueryString: false
+            Cookies: { Forward: none }
+          DefaultTTL: 0
+          MinTTL: 0
+          MaxTTL: 0
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+
+  AliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasEdge
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2   # CloudFront hosted zone id (fixed)
+        DNSName: !GetAtt Distribution.DomainName
+
+Outputs:
+  HostedZoneId:
+    Value: !Ref HostedZone
+    Export:
+      Name: aisl-click:HostedZoneId
+  NameServers:
+    Value: !Join [",", !GetAtt HostedZone.NameServers]
+  CloudFrontDomain:
+    Condition: HasEdge
+    Value: !GetAtt Distribution.DomainName
