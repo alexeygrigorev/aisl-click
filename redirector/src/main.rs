@@ -10,7 +10,7 @@ use lambda_http::{run, service_fn, Body, Error, Request, Response};
 const REDIRECTS: &[(&str, &str)] = &[
     // slug       destination
     ("", "https://aishippinglabs.com/"),
-    ("munich", "https://aishippinglabs.com/workshops/ai-coding-tools-compared"),
+    ("munich", "https://aishippinglabs.com/workshops/full-stack-vibe-coding"),
 ];
 
 /// Look up the destination for a request path (e.g. "/munich" -> the URL).
