@@ -11,6 +11,7 @@ const REDIRECTS: &[(&str, &str)] = &[
     // slug       destination
     ("", "https://aishippinglabs.com/"),
     ("munich", "https://aishippinglabs.com/workshops/full-stack-vibe-coding"),
+    ("berlin", "https://aishippinglabs.com/workshops/full-stack-vibe-coding"),
 ];
 
 /// Look up the destination for a request path (e.g. "/munich" -> the URL).
@@ -47,17 +48,19 @@ async fn main() -> Result<(), Error> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn known_slug_redirects() {
-        assert_eq!(
-            lookup("/munich"),
-            Some("https://aishippinglabs.com/workshops/ai-coding-tools-compared")
-        );
-        // case-insensitive
-        assert_eq!(
-            lookup("/MUNICH"),
-            Some("https://aishippinglabs.com/workshops/ai-coding-tools-compared")
-        );
+    #[tokio::test]
+    async fn workshop_shortcuts_redirect_to_the_same_materials() {
+        for path in ["/munich", "/MUNICH", "/berlin", "/BERLIN"] {
+            let mut request = Request::new(Body::Empty);
+            *request.uri_mut() = path.parse().unwrap();
+            let response = handle(request).await.unwrap();
+            assert_eq!(response.status(), 302);
+            assert_eq!(
+                response.headers()["location"],
+                "https://aishippinglabs.com/workshops/full-stack-vibe-coding"
+            );
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
     }
 
     #[test]
